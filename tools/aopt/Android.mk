@@ -42,7 +42,7 @@ aoptSources := \
     logstubs.cpp 
 
 aoptHostStaticLibs := \
-    libandroidfw-static \
+    libaoptfw-static \
     libpng \
     liblog \
     libexpat_static \
@@ -71,15 +71,16 @@ CFLAGS := \
 	-DHAVE_LITTLE_ENDIAN_H \
 	-D__ANDROID__ \
 	-D_ANDROID_CONFIG_H \
-	-D_BYPASS_DSO_ERROR 
+	-D_BYPASS_DSO_ERROR \
+	-DHAVE_ERRNO_H='1'
 	
 CFLAGS += -Wno-format-y2k
 CFLAGS += -DSTATIC_ANDROIDFW_FOR_TOOLS
 CFLAGS += -DHAVE_ANDROID_OS=1
 CFLAGS += -D'AOPT_VERSION="$(PLATFORM_VERSION)-$(TARGET_BUILD_VARIANT)"' 
-CFLAGS += -Wall -Werror -Wunreachable-code -Wno-error=unused-but-set-variable
-
-aoptCppFlags := -std=gnu++11 -Wno-missing-field-initializers -g -O3 
+CFLAGS += -Wall -Werror -Wno-error=unreachable-code -Wno-error=unknown-attributes
+CFLAGS += -Wno-error=unused-variable -Wno-error=unused-but-set-variable  
+aoptCppFlags := -std=gnu++14 -Wno-missing-field-initializers -O3 
 aoptHostLdLibs := -lc -lgcc -ldl -lz -lm -lstdc++
 aoptIncludes := \
         $(LOCAL_PATH)/include \
@@ -90,14 +91,13 @@ aoptIncludes := \
         $(LOCAL_PATH)/libpng \
         external/expat \
         external/zlib \
-        bionic/libc/include \
         external/libcxx/include \
         system/core/libziparchive \
 	$(LOCAL_PATH)/libaoptfw 
    
 include $(CLEAR_VARS)
 
-ANDROIDFW_PATH := ../../libs/androidfw
+ANDROIDFW_PATH := libaoptfw
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_C_INCLUDES)
 
@@ -105,6 +105,7 @@ androidfw_srcs := \
     $(ANDROIDFW_PATH)/Asset.cpp \
     $(ANDROIDFW_PATH)/AssetDir.cpp \
     $(ANDROIDFW_PATH)/AssetManager.cpp \
+    $(ANDROIDFW_PATH)/LocaleData.cpp \
     $(ANDROIDFW_PATH)/misc.cpp \
     $(ANDROIDFW_PATH)/ObbFile.cpp \
     $(ANDROIDFW_PATH)/ResourceTypes.cpp \
@@ -114,9 +115,10 @@ androidfw_srcs := \
     $(ANDROIDFW_PATH)/ZipUtils.cpp \
     $(ANDROIDFW_PATH)/BackupData.cpp \
     $(ANDROIDFW_PATH)/BackupHelpers.cpp \
-    $(ANDROIDFW_PATH)/CursorWindow.cpp
+    $(ANDROIDFW_PATH)/CursorWindow.cpp \
+    $(ANDROIDFW_PATH)/DisplayEventDispatcher.cpp
 
-LOCAL_MODULE:= libandroidfw-static
+LOCAL_MODULE:= libaoptfw-static
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS += -DSTATIC_ANDROIDFW_FOR_TOOLS
 LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code

@@ -14,20 +14,25 @@
 
 LOCAL_PATH:= $(call my-dir)
 
-# libandroidfw is partially built for the host (used by obbtool, aapt, and others)
+# libandroidfw is partially built for the host (used by obbtool, aopt, and others)
 # These files are common to host and target builds.
 
 commonSources := \
     Asset.cpp \
     AssetDir.cpp \
     AssetManager.cpp \
+    LocaleData.cpp \
     misc.cpp \
     ObbFile.cpp \
     ResourceTypes.cpp \
     StreamingZipInflater.cpp \
     TypeWrappers.cpp \
     ZipFileRO.cpp \
-    ZipUtils.cpp
+    ZipUtils.cpp \
+    BackupData.cpp \
+    BackupHelpers.cpp \
+    CursorWindow.cpp \
+    DisplayEventDispatcher.cpp
 
 
 # For the host

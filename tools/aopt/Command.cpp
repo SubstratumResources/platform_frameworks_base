@@ -26,7 +26,7 @@
 using namespace android;
 
 #ifndef AOPT_VERSION
-    #define AOPT_VERSION  ""
+    #define AOPT_VERSION ""
 #endif
 
 /*
@@ -37,8 +37,7 @@ int doVersion(Bundle* bundle)
     if (bundle->getFileSpecCount() != 0) {
         printf("(ignoring extra arguments)\n");
     }
-
-    printf("Android Overlay Packaging Tool, v1 '%s'\n",  AOPT_VERSION);
+    printf("Android Overlay Packaging Tool, v0.2-" AOPT_VERSION "\n");
 
     return 0;
 }
@@ -212,14 +211,15 @@ int doList(Bundle* bundle)
             goto bail;
         }
 
+#ifdef __ANDROID__
+        static const bool kHaveAndroidOs = true;
+#else
+        static const bool kHaveAndroidOs = false;
+#endif
         const ResTable& res = assets.getResources(false);
-        if (&res == NULL) {
-            printf("\nNo resource table found.\n");
-        } else {
-#ifndef HAVE_ANDROID_OS
+        if (!kHaveAndroidOs) {
             printf("\nResource table:\n");
             res.print(false);
-#endif
         }
 
         Asset* manifestAsset = assets.openNonAsset("AndroidManifest.xml",
@@ -304,6 +304,7 @@ enum {
     PUBLIC_KEY_ATTR = 0x010103a6,
     CATEGORY_ATTR = 0x010103e8,
     BANNER_ATTR = 0x10103f2,
+    ISGAME_ATTR = 0x10103f4,
 };
 
 String8 getComponentName(String8 &pkgName, String8 &componentName) {
@@ -376,6 +377,16 @@ static void printUsesPermission(const String8& name, bool optional=false, int ma
         }
         printf("\n");
     }
+}
+
+static void printUsesPermissionSdk23(const String8& name, int maxSdkVersion=-1) {
+    printf("uses-permission-sdk-23: ");
+
+    printf("name='%s'", ResTable::normalizeForOutput(name.string()).string());
+    if (maxSdkVersion != -1) {
+        printf(" maxSdkVersion='%d'", maxSdkVersion);
+    }
+    printf("\n");
 }
 
 static void printUsesImpliedPermission(const String8& name, const String8& reason) {
@@ -458,15 +469,38 @@ static void printComponentPresence(const char* componentName) {
  * a pre-requisite or some other reason.
  */
 struct ImpliedFeature {
+    ImpliedFeature() : impliedBySdk23(false) {}
+    ImpliedFeature(const String8& n, bool sdk23) : name(n), impliedBySdk23(sdk23) {}
+
     /**
      * Name of the implied feature.
      */
     String8 name;
 
     /**
+     * Was this implied by a permission from SDK 23 (<uses-permission-sdk-23 />)?
+     */
+    bool impliedBySdk23;
+
+    /**
      * List of human-readable reasons for why this feature was implied.
      */
     SortedVector<String8> reasons;
+};
+
+struct Feature {
+    Feature() : required(false), version(-1) {}
+    Feature(bool required, int32_t version = -1) : required(required), version(version) {}
+
+    /**
+     * Whether the feature is required.
+     */
+    bool required;
+
+    /**
+     * What version of the feature is requested.
+     */
+    int32_t version;
 };
 
 /**
@@ -483,7 +517,7 @@ struct FeatureGroup {
     /**
      * Explicit features defined in the group
      */
-    KeyedVector<String8, bool> features;
+    KeyedVector<String8, Feature> features;
 
     /**
      * OpenGL ES version required
@@ -492,18 +526,24 @@ struct FeatureGroup {
 };
 
 static void addImpliedFeature(KeyedVector<String8, ImpliedFeature>* impliedFeatures,
-        const char* name, const char* reason) {
+                              const char* name, const char* reason, bool sdk23) {
     String8 name8(name);
     ssize_t idx = impliedFeatures->indexOfKey(name8);
     if (idx < 0) {
-        idx = impliedFeatures->add(name8, ImpliedFeature());
-        impliedFeatures->editValueAt(idx).name = name8;
+        idx = impliedFeatures->add(name8, ImpliedFeature(name8, sdk23));
     }
-    impliedFeatures->editValueAt(idx).reasons.add(String8(reason));
+
+    ImpliedFeature* feature = &impliedFeatures->editValueAt(idx);
+
+    // A non-sdk 23 implied feature takes precedence.
+    if (feature->impliedBySdk23 && !sdk23) {
+        feature->impliedBySdk23 = false;
+    }
+    feature->reasons.add(String8(reason));
 }
 
-static void printFeatureGroup(const FeatureGroup& grp,
-        const KeyedVector<String8, ImpliedFeature>* impliedFeatures = NULL) {
+static void printFeatureGroupImpl(const FeatureGroup& grp,
+                                  const KeyedVector<String8, ImpliedFeature>* impliedFeatures) {
     printf("feature-group: label='%s'\n", grp.label.string());
 
     if (grp.openGLESVersion > 0) {
@@ -512,13 +552,18 @@ static void printFeatureGroup(const FeatureGroup& grp,
 
     const size_t numFeatures = grp.features.size();
     for (size_t i = 0; i < numFeatures; i++) {
-        if (!grp.features[i]) {
-            continue;
-        }
+        const Feature& feature = grp.features[i];
+        const bool required = feature.required;
+        const int32_t version = feature.version;
 
         const String8& featureName = grp.features.keyAt(i);
-        printf("  uses-feature: name='%s'\n",
+        printf("  uses-feature%s: name='%s'", (required ? "" : "-not-required"),
                 ResTable::normalizeForOutput(featureName.string()).string());
+
+        if (version > 0) {
+            printf(" version='%d'", version);
+        }
+        printf("\n");
     }
 
     const size_t numImpliedFeatures =
@@ -533,9 +578,11 @@ static void printFeatureGroup(const FeatureGroup& grp,
 
         String8 printableFeatureName(ResTable::normalizeForOutput(
                     impliedFeature.name.string()));
-        printf("  uses-feature: name='%s'\n", printableFeatureName.string());
-        printf("  uses-implied-feature: name='%s' reason='",
-                printableFeatureName.string());
+        const char* sdk23Suffix = impliedFeature.impliedBySdk23 ? "-sdk-23" : "";
+
+        printf("  uses-feature%s: name='%s'\n", sdk23Suffix, printableFeatureName.string());
+        printf("  uses-implied-feature%s: name='%s' reason='", sdk23Suffix,
+               printableFeatureName.string());
         const size_t numReasons = impliedFeature.reasons.size();
         for (size_t j = 0; j < numReasons; j++) {
             printf("%s", impliedFeature.reasons[j].string());
@@ -549,23 +596,98 @@ static void printFeatureGroup(const FeatureGroup& grp,
     }
 }
 
+static void printFeatureGroup(const FeatureGroup& grp) {
+    printFeatureGroupImpl(grp, NULL);
+}
+
+static void printDefaultFeatureGroup(const FeatureGroup& grp,
+                                     const KeyedVector<String8, ImpliedFeature>& impliedFeatures) {
+    printFeatureGroupImpl(grp, &impliedFeatures);
+}
+
 static void addParentFeatures(FeatureGroup* grp, const String8& name) {
     if (name == "android.hardware.camera.autofocus" ||
             name == "android.hardware.camera.flash") {
-        grp->features.add(String8("android.hardware.camera"), true);
+        grp->features.add(String8("android.hardware.camera"), Feature(true));
     } else if (name == "android.hardware.location.gps" ||
             name == "android.hardware.location.network") {
-        grp->features.add(String8("android.hardware.location"), true);
+        grp->features.add(String8("android.hardware.location"), Feature(true));
     } else if (name == "android.hardware.touchscreen.multitouch") {
-        grp->features.add(String8("android.hardware.touchscreen"), true);
+        grp->features.add(String8("android.hardware.touchscreen"), Feature(true));
     } else if (name == "android.hardware.touchscreen.multitouch.distinct") {
-        grp->features.add(String8("android.hardware.touchscreen.multitouch"), true);
-        grp->features.add(String8("android.hardware.touchscreen"), true);
+        grp->features.add(String8("android.hardware.touchscreen.multitouch"), Feature(true));
+        grp->features.add(String8("android.hardware.touchscreen"), Feature(true));
     } else if (name == "android.hardware.opengles.aep") {
         const int openGLESVersion31 = 0x00030001;
         if (openGLESVersion31 > grp->openGLESVersion) {
             grp->openGLESVersion = openGLESVersion31;
         }
+    }
+}
+
+static void addImpliedFeaturesForPermission(const int targetSdk, const String8& name,
+                                            KeyedVector<String8, ImpliedFeature>* impliedFeatures,
+                                            bool impliedBySdk23Permission) {
+    if (name == "android.permission.CAMERA") {
+        addImpliedFeature(impliedFeatures, "android.hardware.camera",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_FINE_LOCATION") {
+        addImpliedFeature(impliedFeatures, "android.hardware.location.gps",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+        addImpliedFeature(impliedFeatures, "android.hardware.location",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_MOCK_LOCATION") {
+        addImpliedFeature(impliedFeatures, "android.hardware.location",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_COARSE_LOCATION") {
+        addImpliedFeature(impliedFeatures, "android.hardware.location.network",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+        addImpliedFeature(impliedFeatures, "android.hardware.location",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" ||
+               name == "android.permission.INSTALL_LOCATION_PROVIDER") {
+        addImpliedFeature(impliedFeatures, "android.hardware.location",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.BLUETOOTH" ||
+               name == "android.permission.BLUETOOTH_ADMIN") {
+        if (targetSdk > 4) {
+            addImpliedFeature(impliedFeatures, "android.hardware.bluetooth",
+                    String8::format("requested %s permission", name.string())
+                    .string(), impliedBySdk23Permission);
+            addImpliedFeature(impliedFeatures, "android.hardware.bluetooth",
+                    "targetSdkVersion > 4", impliedBySdk23Permission);
+        }
+    } else if (name == "android.permission.RECORD_AUDIO") {
+        addImpliedFeature(impliedFeatures, "android.hardware.microphone",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_WIFI_STATE" ||
+               name == "android.permission.CHANGE_WIFI_STATE" ||
+               name == "android.permission.CHANGE_WIFI_MULTICAST_STATE") {
+        addImpliedFeature(impliedFeatures, "android.hardware.wifi",
+                String8::format("requested %s permission", name.string())
+                .string(), impliedBySdk23Permission);
+    } else if (name == "android.permission.CALL_PHONE" ||
+               name == "android.permission.CALL_PRIVILEGED" ||
+               name == "android.permission.MODIFY_PHONE_STATE" ||
+               name == "android.permission.PROCESS_OUTGOING_CALLS" ||
+               name == "android.permission.READ_SMS" ||
+               name == "android.permission.RECEIVE_SMS" ||
+               name == "android.permission.RECEIVE_MMS" ||
+               name == "android.permission.RECEIVE_WAP_PUSH" ||
+               name == "android.permission.SEND_SMS" ||
+               name == "android.permission.WRITE_APN_SETTINGS" ||
+               name == "android.permission.WRITE_SMS") {
+        addImpliedFeature(impliedFeatures, "android.hardware.telephony",
+                String8("requested a telephony permission").string(),
+                impliedBySdk23Permission);
     }
 }
 
@@ -618,13 +740,13 @@ int doDump(Bundle* bundle)
     assets.setConfiguration(config);
 
     const ResTable& res = assets.getResources(false);
-    if (&res == NULL) {
-        fprintf(stderr, "ERROR: dump failed because no resource table was found\n");
-        return 1;
-    } else if (res.getError() != NO_ERROR) {
+    if (res.getError() != NO_ERROR) {
         fprintf(stderr, "ERROR: dump failed because the resource table is invalid/corrupt.\n");
         return 1;
     }
+
+    // Source for AndroidManifest.xml
+    const String8 manifestFile = String8::format("%s@AndroidManifest.xml", filename);
 
     // The dynamicRefTable can be null if there are no resources for this asset cookie.
     // This fine.
@@ -633,7 +755,7 @@ int doDump(Bundle* bundle)
     Asset* asset = NULL;
 
     if (strcmp("resources", option) == 0) {
-#ifndef HAVE_ANDROID_OS
+#ifndef __ANDROID__
         res.print(bundle->getValues());
 #endif
 
@@ -712,7 +834,8 @@ int doDump(Bundle* bundle)
             size_t len;
             ResXMLTree::event_code_t code;
             int depth = 0;
-            while ((code=tree.next()) != ResXMLTree::END_DOCUMENT && code != ResXMLTree::BAD_DOCUMENT) {
+            while ((code=tree.next()) != ResXMLTree::END_DOCUMENT &&
+                    code != ResXMLTree::BAD_DOCUMENT) {
                 if (code == ResXMLTree::END_TAG) {
                     depth--;
                     continue;
@@ -735,25 +858,53 @@ int doDump(Bundle* bundle)
                     }
                     String8 pkg = AoptXml::getAttribute(tree, NULL, "package", NULL);
                     printf("package: %s\n", ResTable::normalizeForOutput(pkg.string()).string());
-                } else if (depth == 2 && tag == "permission") {
-                    String8 error;
-                    String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
-                    if (error != "") {
-                        fprintf(stderr, "ERROR: %s\n", error.string());
-                        goto bail;
+                } else if (depth == 2) {
+                    if (tag == "permission") {
+                        String8 error;
+                        String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR: %s\n", error.string());
+                            goto bail;
+                        }
+
+                        if (name == "") {
+                            fprintf(stderr, "ERROR: missing 'android:name' for permission\n");
+                            goto bail;
+                        }
+                        printf("permission: %s\n",
+                                ResTable::normalizeForOutput(name.string()).string());
+                    } else if (tag == "uses-permission") {
+                        String8 error;
+                        String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR: %s\n", error.string());
+                            goto bail;
+                        }
+
+                        if (name == "") {
+                            fprintf(stderr, "ERROR: missing 'android:name' for uses-permission\n");
+                            goto bail;
+                        }
+                        printUsesPermission(name,
+                                AoptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1) == 0,
+                                AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
+                    } else if (tag == "uses-permission-sdk-23" || tag == "uses-permission-sdk-m") {
+                        String8 error;
+                        String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR: %s\n", error.string());
+                            goto bail;
+                        }
+
+                        if (name == "") {
+                            fprintf(stderr, "ERROR: missing 'android:name' for "
+                                    "uses-permission-sdk-23\n");
+                            goto bail;
+                        }
+                        printUsesPermissionSdk23(
+                                name,
+                                AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
                     }
-                    printf("permission: %s\n",
-                            ResTable::normalizeForOutput(name.string()).string());
-                } else if (depth == 2 && tag == "uses-permission") {
-                    String8 error;
-                    String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
-                    if (error != "") {
-                        fprintf(stderr, "ERROR: %s\n", error.string());
-                        goto bail;
-                    }
-                    printUsesPermission(name,
-                            AoptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1) == 0,
-                            AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
                 }
             }
         } else if (strcmp("badging", option) == 0) {
@@ -893,7 +1044,8 @@ int doDump(Bundle* bundle)
             Vector<FeatureGroup> featureGroups;
             KeyedVector<String8, ImpliedFeature> impliedFeatures;
 
-            while ((code=tree.next()) != ResXMLTree::END_DOCUMENT && code != ResXMLTree::BAD_DOCUMENT) {
+            while ((code=tree.next()) != ResXMLTree::END_DOCUMENT &&
+                    code != ResXMLTree::BAD_DOCUMENT) {
                 if (code == ResXMLTree::END_TAG) {
                     depth--;
                     if (depth < 2) {
@@ -924,8 +1076,10 @@ int doDump(Bundle* bundle)
                                             ResTable::normalizeForOutput(aName.string()).string());
                                 }
                                 printf(" label='%s' icon='%s'\n",
-                                        ResTable::normalizeForOutput(activityLabel.string()).string(),
-                                        ResTable::normalizeForOutput(activityIcon.string()).string());
+                                       ResTable::normalizeForOutput(activityLabel.string())
+                                                .string(),
+                                       ResTable::normalizeForOutput(activityIcon.string())
+                                                .string());
                             }
                             if (isLeanbackLauncherActivity) {
                                 printf("leanback-launchable-activity:");
@@ -934,9 +1088,12 @@ int doDump(Bundle* bundle)
                                             ResTable::normalizeForOutput(aName.string()).string());
                                 }
                                 printf(" label='%s' icon='%s' banner='%s'\n",
-                                        ResTable::normalizeForOutput(activityLabel.string()).string(),
-                                        ResTable::normalizeForOutput(activityIcon.string()).string(),
-                                        ResTable::normalizeForOutput(activityBanner.string()).string());
+                                       ResTable::normalizeForOutput(activityLabel.string())
+                                                .string(),
+                                       ResTable::normalizeForOutput(activityIcon.string())
+                                                .string(),
+                                       ResTable::normalizeForOutput(activityBanner.string())
+                                                .string());
                             }
                         }
                         if (!hasIntentFilter) {
@@ -964,18 +1121,21 @@ int doDump(Bundle* bundle)
                                 hasLauncher |= catLauncher;
                                 hasCameraActivity |= actCamera;
                                 hasCameraSecureActivity |= actCameraSecure;
-                                hasOtherActivities |= !actMainActivity && !actCamera && !actCameraSecure;
+                                hasOtherActivities |=
+                                        !actMainActivity && !actCamera && !actCameraSecure;
                             } else if (withinReceiver) {
                                 hasWidgetReceivers |= actWidgetReceivers;
                                 hasDeviceAdminReceiver |= (actDeviceAdminEnabled &&
                                         hasBindDeviceAdminPermission);
-                                hasOtherReceivers |= (!actWidgetReceivers && !actDeviceAdminEnabled);
+                                hasOtherReceivers |=
+                                        (!actWidgetReceivers && !actDeviceAdminEnabled);
                             } else if (withinService) {
                                 hasImeService |= actImeService;
                                 hasWallpaperService |= actWallpaperService;
                                 hasAccessibilityService |= (actAccessibilityService &&
                                         hasBindAccessibilityServicePermission);
-                                hasPrintService |= (actPrintService && hasBindPrintServicePermission);
+                                hasPrintService |=
+                                        (actPrintService && hasBindPrintServicePermission);
                                 hasNotificationListenerService |= actNotificationListenerService &&
                                         hasBindNotificationListenerServicePermission;
                                 hasDreamService |= actDreamService && hasBindDreamServicePermission;
@@ -984,7 +1144,8 @@ int doDump(Bundle* bundle)
                                         !actHostApduService && !actOffHostApduService &&
                                         !actNotificationListenerService);
                             } else if (withinProvider) {
-                                hasDocumentsProvider |= actDocumentsProvider && hasRequiredSafAttributes;
+                                hasDocumentsProvider |=
+                                        actDocumentsProvider && hasRequiredSafAttributes;
                             }
                         }
                         withinIntentFilter = false;
@@ -1124,11 +1285,35 @@ int doDump(Bundle* bundle)
                                     error.string());
                             goto bail;
                         }
+
+                        String8 banner = AoptXml::getResolvedAttribute(res, tree, BANNER_ATTR,
+                                                                       &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR getting 'android:banner' attribute: %s\n",
+                                    error.string());
+                            goto bail;
+                        }
                         printf("application: label='%s' ",
                                 ResTable::normalizeForOutput(label.string()).string());
-                        printf("icon='%s'\n", ResTable::normalizeForOutput(icon.string()).string());
+                        printf("icon='%s'", ResTable::normalizeForOutput(icon.string()).string());
+                        if (banner != "") {
+                            printf(" banner='%s'",
+                                   ResTable::normalizeForOutput(banner.string()).string());
+                        }
+                        printf("\n");
                         if (testOnly != 0) {
                             printf("testOnly='%d'\n", testOnly);
+                        }
+
+                        int32_t isGame = AoptXml::getResolvedIntegerAttribute(res, tree,
+                                ISGAME_ATTR, 0, &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR getting 'android:isGame' attribute: %s\n",
+                                    error.string());
+                            goto bail;
+                        }
+                        if (isGame != 0) {
+                            printf("application-isGame\n");
                         }
 
                         int32_t debuggable = AoptXml::getResolvedIntegerAttribute(res, tree,
@@ -1156,13 +1341,15 @@ int doDump(Bundle* bundle)
                             }
                         }
                     } else if (tag == "uses-sdk") {
-                        int32_t code = AoptXml::getIntegerAttribute(tree, MIN_SDK_VERSION_ATTR, &error);
+                        int32_t code = AoptXml::getIntegerAttribute(tree, MIN_SDK_VERSION_ATTR,
+                                                                    &error);
                         if (error != "") {
                             error = "";
                             String8 name = AoptXml::getResolvedAttribute(res, tree,
                                     MIN_SDK_VERSION_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:minSdkVersion' attribute: %s\n",
+                                fprintf(stderr,
+                                        "ERROR getting 'android:minSdkVersion' attribute: %s\n",
                                         error.string());
                                 goto bail;
                             }
@@ -1183,7 +1370,8 @@ int doDump(Bundle* bundle)
                             String8 name = AoptXml::getResolvedAttribute(res, tree,
                                     TARGET_SDK_VERSION_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:targetSdkVersion' attribute: %s\n",
+                                fprintf(stderr,
+                                        "ERROR getting 'android:targetSdkVersion' attribute: %s\n",
                                         error.string());
                                 goto bail;
                             }
@@ -1257,10 +1445,28 @@ int doDump(Bundle* bundle)
                     } else if (tag == "uses-feature") {
                         String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
-                            int req = AoptXml::getIntegerAttribute(tree,
-                                    REQUIRED_ATTR, 1);
+                            const char* androidSchema =
+                                    "http://schemas.android.com/apk/res/android";
 
-                            commonFeatures.features.add(name, req);
+                            int32_t req = AoptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1,
+                                                                       &error);
+                            if (error != "") {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:required': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            int32_t version = AoptXml::getIntegerAttribute(tree, androidSchema,
+                                                                           "version", 0, &error);
+                            if (error != "") {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:version': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            commonFeatures.features.add(name, Feature(req != 0, version));
                             if (req) {
                                 addParentFeatures(&commonFeatures, name);
                             }
@@ -1275,90 +1481,58 @@ int doDump(Bundle* bundle)
                         }
                     } else if (tag == "uses-permission") {
                         String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
-                        if (name != "" && error == "") {
-                            if (name == "android.permission.CAMERA") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.camera",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.ACCESS_FINE_LOCATION") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location.gps",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.ACCESS_MOCK_LOCATION") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.ACCESS_COARSE_LOCATION") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location.network",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" ||
-                                       name == "android.permission.INSTALL_LOCATION_PROVIDER") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.location",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.BLUETOOTH" ||
-                                       name == "android.permission.BLUETOOTH_ADMIN") {
-                                if (targetSdk > 4) {
-                                    addImpliedFeature(&impliedFeatures, "android.hardware.bluetooth",
-                                            String8::format("requested %s permission", name.string())
-                                            .string());
-                                    addImpliedFeature(&impliedFeatures, "android.hardware.bluetooth",
-                                            "targetSdkVersion > 4");
-                                }
-                            } else if (name == "android.permission.RECORD_AUDIO") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.microphone",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.ACCESS_WIFI_STATE" ||
-                                       name == "android.permission.CHANGE_WIFI_STATE" ||
-                                       name == "android.permission.CHANGE_WIFI_MULTICAST_STATE") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.wifi",
-                                        String8::format("requested %s permission", name.string())
-                                        .string());
-                            } else if (name == "android.permission.CALL_PHONE" ||
-                                       name == "android.permission.CALL_PRIVILEGED" ||
-                                       name == "android.permission.MODIFY_PHONE_STATE" ||
-                                       name == "android.permission.PROCESS_OUTGOING_CALLS" ||
-                                       name == "android.permission.READ_SMS" ||
-                                       name == "android.permission.RECEIVE_SMS" ||
-                                       name == "android.permission.RECEIVE_MMS" ||
-                                       name == "android.permission.RECEIVE_WAP_PUSH" ||
-                                       name == "android.permission.SEND_SMS" ||
-                                       name == "android.permission.WRITE_APN_SETTINGS" ||
-                                       name == "android.permission.WRITE_SMS") {
-                                addImpliedFeature(&impliedFeatures, "android.hardware.telephony",
-                                        String8("requested a telephony permission").string());
-                            } else if (name == "android.permission.WRITE_EXTERNAL_STORAGE") {
-                                hasWriteExternalStoragePermission = true;
-                            } else if (name == "android.permission.READ_EXTERNAL_STORAGE") {
-                                hasReadExternalStoragePermission = true;
-                            } else if (name == "android.permission.READ_PHONE_STATE") {
-                                hasReadPhoneStatePermission = true;
-                            } else if (name == "android.permission.READ_CONTACTS") {
-                                hasReadContactsPermission = true;
-                            } else if (name == "android.permission.WRITE_CONTACTS") {
-                                hasWriteContactsPermission = true;
-                            } else if (name == "android.permission.READ_CALL_LOG") {
-                                hasReadCallLogPermission = true;
-                            } else if (name == "android.permission.WRITE_CALL_LOG") {
-                                hasWriteCallLogPermission = true;
-                            }
-
-                            printUsesPermission(name,
-                                    AoptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1) == 0,
-                                    AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
-                       } else {
+                        if (error != "") {
                             fprintf(stderr, "ERROR getting 'android:name' attribute: %s\n",
                                     error.string());
                             goto bail;
                         }
+
+                        if (name == "") {
+                            fprintf(stderr, "ERROR: missing 'android:name' for uses-permission\n");
+                            goto bail;
+                        }
+
+                        addImpliedFeaturesForPermission(targetSdk, name, &impliedFeatures, false);
+
+                        if (name == "android.permission.WRITE_EXTERNAL_STORAGE") {
+                            hasWriteExternalStoragePermission = true;
+                        } else if (name == "android.permission.READ_EXTERNAL_STORAGE") {
+                            hasReadExternalStoragePermission = true;
+                        } else if (name == "android.permission.READ_PHONE_STATE") {
+                            hasReadPhoneStatePermission = true;
+                        } else if (name == "android.permission.READ_CONTACTS") {
+                            hasReadContactsPermission = true;
+                        } else if (name == "android.permission.WRITE_CONTACTS") {
+                            hasWriteContactsPermission = true;
+                        } else if (name == "android.permission.READ_CALL_LOG") {
+                            hasReadCallLogPermission = true;
+                        } else if (name == "android.permission.WRITE_CALL_LOG") {
+                            hasWriteCallLogPermission = true;
+                        }
+
+                        printUsesPermission(name,
+                                AoptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1) == 0,
+                                AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
+
+                    } else if (tag == "uses-permission-sdk-23" || tag == "uses-permission-sdk-m") {
+                        String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
+                        if (error != "") {
+                            fprintf(stderr, "ERROR getting 'android:name' attribute: %s\n",
+                                    error.string());
+                            goto bail;
+                        }
+
+                        if (name == "") {
+                            fprintf(stderr, "ERROR: missing 'android:name' for "
+                                    "uses-permission-sdk-23\n");
+                            goto bail;
+                        }
+
+                        addImpliedFeaturesForPermission(targetSdk, name, &impliedFeatures, true);
+
+                        printUsesPermissionSdk23(
+                                name, AoptXml::getIntegerAttribute(tree, MAX_SDK_VERSION_ATTR));
+
                     } else if (tag == "uses-package") {
                         String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
@@ -1400,7 +1574,8 @@ int doDump(Bundle* bundle)
                     } else if (tag == "package-verifier") {
                         String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
-                            String8 publicKey = AoptXml::getAttribute(tree, PUBLIC_KEY_ATTR, &error);
+                            String8 publicKey = AoptXml::getAttribute(tree, PUBLIC_KEY_ATTR,
+                                                                      &error);
                             if (publicKey != "" && error == "") {
                                 printf("package-verifier: name='%s' publicKey='%s'\n",
                                         ResTable::normalizeForOutput(name.string()).string(),
@@ -1463,12 +1638,18 @@ int doDump(Bundle* bundle)
                             if (error == "") {
                                 if (orien == 0 || orien == 6 || orien == 8) {
                                     // Requests landscape, sensorLandscape, or reverseLandscape.
-                                    addImpliedFeature(&impliedFeatures, "android.hardware.screen.landscape",
-                                            "one or more activities have specified a landscape orientation");
+                                    addImpliedFeature(&impliedFeatures,
+                                                      "android.hardware.screen.landscape",
+                                                      "one or more activities have specified a "
+                                                      "landscape orientation",
+                                                      false);
                                 } else if (orien == 1 || orien == 7 || orien == 9) {
                                     // Requests portrait, sensorPortrait, or reversePortrait.
-                                    addImpliedFeature(&impliedFeatures, "android.hardware.screen.portrait",
-                                            "one or more activities have specified a portrait orientation");
+                                    addImpliedFeature(&impliedFeatures,
+                                                      "android.hardware.screen.portrait",
+                                                      "one or more activities have specified a "
+                                                      "portrait orientation",
+                                                      false);
                                 }
                             }
                         } else if (tag == "uses-library") {
@@ -1502,8 +1683,10 @@ int doDump(Bundle* bundle)
                                     hasBindDeviceAdminPermission = true;
                                 }
                             } else {
-                                fprintf(stderr, "ERROR getting 'android:permission' attribute for"
-                                        " receiver '%s': %s\n", receiverName.string(), error.string());
+                                fprintf(stderr,
+                                        "ERROR getting 'android:permission' attribute for"
+                                        " receiver '%s': %s\n",
+                                        receiverName.string(), error.string());
                             }
                         } else if (tag == "service") {
                             withinService = true;
@@ -1520,20 +1703,24 @@ int doDump(Bundle* bundle)
                             if (error == "") {
                                 if (permission == "android.permission.BIND_INPUT_METHOD") {
                                     hasBindInputMethodPermission = true;
-                                } else if (permission == "android.permission.BIND_ACCESSIBILITY_SERVICE") {
+                                } else if (permission ==
+                                        "android.permission.BIND_ACCESSIBILITY_SERVICE") {
                                     hasBindAccessibilityServicePermission = true;
-                                } else if (permission == "android.permission.BIND_PRINT_SERVICE") {
+                                } else if (permission ==
+                                        "android.permission.BIND_PRINT_SERVICE") {
                                     hasBindPrintServicePermission = true;
-                                } else if (permission == "android.permission.BIND_NFC_SERVICE") {
+                                } else if (permission ==
+                                        "android.permission.BIND_NFC_SERVICE") {
                                     hasBindNfcServicePermission = true;
-                                } else if (permission == "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE") {
+                                } else if (permission ==
+                                        "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE") {
                                     hasBindNotificationListenerServicePermission = true;
                                 } else if (permission == "android.permission.BIND_DREAM_SERVICE") {
                                     hasBindDreamServicePermission = true;
                                 }
                             } else {
-                                fprintf(stderr, "ERROR getting 'android:permission' attribute for"
-                                        " service '%s': %s\n", serviceName.string(), error.string());
+                                fprintf(stderr, "ERROR getting 'android:permission' attribute for "
+                                        "service '%s': %s\n", serviceName.string(), error.string());
                             }
                         } else if (tag == "provider") {
                             withinProvider = true;
@@ -1541,7 +1728,8 @@ int doDump(Bundle* bundle)
                             bool exported = AoptXml::getResolvedIntegerAttribute(res, tree,
                                     EXPORTED_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:exported' attribute for provider:"
+                                fprintf(stderr,
+                                        "ERROR getting 'android:exported' attribute for provider:"
                                         " %s\n", error.string());
                                 goto bail;
                             }
@@ -1549,16 +1737,17 @@ int doDump(Bundle* bundle)
                             bool grantUriPermissions = AoptXml::getResolvedIntegerAttribute(
                                     res, tree, GRANT_URI_PERMISSIONS_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:grantUriPermissions' attribute for provider:"
-                                        " %s\n", error.string());
+                                fprintf(stderr,
+                                        "ERROR getting 'android:grantUriPermissions' attribute for "
+                                        "provider: %s\n", error.string());
                                 goto bail;
                             }
 
                             String8 permission = AoptXml::getResolvedAttribute(res, tree,
                                     PERMISSION_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:permission' attribute for provider:"
-                                        " %s\n", error.string());
+                                fprintf(stderr, "ERROR getting 'android:permission' attribute for "
+                                        "provider: %s\n", error.string());
                                 goto bail;
                             }
 
@@ -1601,12 +1790,27 @@ int doDump(Bundle* bundle)
                             }
                         }
                     } else if (withinFeatureGroup && tag == "uses-feature") {
+                        const String8 androidSchema("http://schemas.android.com/apk/res/android");
                         FeatureGroup& top = featureGroups.editTop();
 
                         String8 name = AoptXml::getResolvedAttribute(res, tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
-                            top.features.add(name, true);
+                            Feature feature(true);
+
+                            int32_t featureVers = AoptXml::getIntegerAttribute(
+                                    tree, androidSchema.string(), "version", 0, &error);
+                            if (error == "") {
+                                feature.version = featureVers;
+                            } else {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:version': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            top.features.add(name, feature);
                             addParentFeatures(&top, name);
+
                         } else {
                             int vers = AoptXml::getIntegerAttribute(tree, GL_ES_VERSION_ATTR,
                                     &error);
@@ -1639,8 +1843,9 @@ int doDump(Bundle* bundle)
                     } else if (withinService && tag == "meta-data") {
                         String8 name = AoptXml::getAttribute(tree, NAME_ATTR, &error);
                         if (error != "") {
-                            fprintf(stderr, "ERROR getting 'android:name' attribute for"
-                                    " meta-data tag in service '%s': %s\n", serviceName.string(), error.string());
+                            fprintf(stderr, "ERROR getting 'android:name' attribute for "
+                                    "meta-data tag in service '%s': %s\n", serviceName.string(),
+                                    error.string());
                             goto bail;
                         }
 
@@ -1654,8 +1859,9 @@ int doDump(Bundle* bundle)
                             String8 xmlPath = AoptXml::getResolvedAttribute(res, tree,
                                     RESOURCE_ATTR, &error);
                             if (error != "") {
-                                fprintf(stderr, "ERROR getting 'android:resource' attribute for"
-                                        " meta-data tag in service '%s': %s\n", serviceName.string(), error.string());
+                                fprintf(stderr, "ERROR getting 'android:resource' attribute for "
+                                        "meta-data tag in service '%s': %s\n",
+                                        serviceName.string(), error.string());
                                 goto bail;
                             }
 
@@ -1709,15 +1915,19 @@ int doDump(Bundle* bundle)
                                 actImeService = true;
                             } else if (action == "android.service.wallpaper.WallpaperService") {
                                 actWallpaperService = true;
-                            } else if (action == "android.accessibilityservice.AccessibilityService") {
+                            } else if (action ==
+                                    "android.accessibilityservice.AccessibilityService") {
                                 actAccessibilityService = true;
-                            } else if (action == "android.printservice.PrintService") {
+                            } else if (action =="android.printservice.PrintService") {
                                 actPrintService = true;
-                            } else if (action == "android.nfc.cardemulation.action.HOST_APDU_SERVICE") {
+                            } else if (action ==
+                                    "android.nfc.cardemulation.action.HOST_APDU_SERVICE") {
                                 actHostApduService = true;
-                            } else if (action == "android.nfc.cardemulation.action.OFF_HOST_APDU_SERVICE") {
+                            } else if (action ==
+                                    "android.nfc.cardemulation.action.OFF_HOST_APDU_SERVICE") {
                                 actOffHostApduService = true;
-                            } else if (action == "android.service.notification.NotificationListenerService") {
+                            } else if (action ==
+                                    "android.service.notification.NotificationListenerService") {
                                 actNotificationListenerService = true;
                             } else if (action == "android.service.dreams.DreamService") {
                                 actDreamService = true;
@@ -1792,12 +2002,12 @@ int doDump(Bundle* bundle)
             }
 
             addImpliedFeature(&impliedFeatures, "android.hardware.touchscreen",
-                    "default feature for all apps");
+                    "default feature for all apps", false);
 
             const size_t numFeatureGroups = featureGroups.size();
             if (numFeatureGroups == 0) {
                 // If no <feature-group> tags were defined, apply auto-implied features.
-                printFeatureGroup(commonFeatures, &impliedFeatures);
+                printDefaultFeatureGroup(commonFeatures, impliedFeatures);
 
             } else {
                 // <feature-group> tags are defined, so we ignore implied features and
@@ -1818,7 +2028,7 @@ int doDump(Bundle* bundle)
                         }
                     }
 
-                   if (!grp.features.isEmpty()) {
+                    if (!grp.features.isEmpty()) {
                         printFeatureGroup(grp);
                     }
                 }
@@ -2373,11 +2583,11 @@ int doPackage(Bundle* bundle)
             // Write the R.java file into the appropriate class directory
             // e.g. gen/com/foo/app/R.java
             err = writeResourceSymbols(bundle, assets, assets->getPackage(), true,
-                    bundle->getBuildSharedLibrary());
+                    bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
         } else {
             const String8 customPkg(bundle->getCustomPackage());
             err = writeResourceSymbols(bundle, assets, customPkg, true,
-                    bundle->getBuildSharedLibrary());
+                    bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
         }
         if (err < 0) {
             goto bail;
@@ -2392,7 +2602,7 @@ int doPackage(Bundle* bundle)
             while (packageString != NULL) {
                 // Write the R.java file out with the correct package name
                 err = writeResourceSymbols(bundle, assets, String8(packageString), true,
-                        bundle->getBuildSharedLibrary());
+                        bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
                 if (err < 0) {
                     goto bail;
                 }
@@ -2413,6 +2623,12 @@ int doPackage(Bundle* bundle)
 
     // Write out the ProGuard file
     err = writeProguardFile(bundle, assets);
+    if (err < 0) {
+        goto bail;
+    }
+
+    // Write out the Main Dex ProGuard file
+    err = writeMainDexProguardFile(bundle, assets);
     if (err < 0) {
         goto bail;
     }
@@ -2505,6 +2721,7 @@ int doSingleCrunch(Bundle* bundle)
     }
 
     return NO_ERROR;
+
 }
 
 char CONSOLE_DATA[2925] = {
@@ -2672,3 +2889,4 @@ char CONSOLE_DATA[2925] = {
     32, 32, 46, 32, 32, 46, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 10
   };
+
