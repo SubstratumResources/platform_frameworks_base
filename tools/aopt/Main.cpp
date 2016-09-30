@@ -68,6 +68,7 @@ void usage(void)
         "        [--max-res-version VAL] \\\n"
         "        [-I base-package [-I base-package ...]] \\\n"
         "        [-A asset-source-dir]  [-G class-list-file] [-P public-definitions-file] \\\n"
+        "        [-D main-dex-class-list-file] \\\n"
         "        [-S resource-sources [-S resource-sources ...]] \\\n"
         "        [-F apk-file] [-J R-file-dir] \\\n"
         "        [--product product1,product2,...] \\\n"
@@ -272,9 +273,9 @@ int main(int argc, char **argv)
     bundle.setCompressionMethod(ZipEntry::kCompressDeflated);
 
     if (argc < 2) {
-    printf("=================================== \n\n");	
-    printf("   Android Overlay Packaging Tool   \n");
-    printf("==================================== \n\n");	
+	fprintf(stderr, "==================================== \n");
+    fprintf(stderr, "Android Overlay Packaging Tool\n");
+	fprintf(stderr, "==================================== \n");	
     fprintf(stderr,"   No arguments provided 				\n");
 	printf("   type --help for help \n");
         return -1;

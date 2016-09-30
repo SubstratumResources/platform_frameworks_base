@@ -43,14 +43,16 @@
 #$(call add-clean-step, rm -rf $(OUT_DIR)/target/common/obj/JAVA_LIBRARIES/core_intermediates)
 #$(call add-clean-step, find $(OUT_DIR) -type f -name "IGTalkSession*" -print0 | xargs -0 rm -f)
 #$(call add-clean-step, rm -rf $(PRODUCT_OUT)/data/*)
-$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/UTILITY_EXECUTABLES/aopt_intermediates/PACKED/aopt)
-$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj_arm/STATIC_LIBRARIES/libandroidfw-static_intermediates)
-$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/STATIC_LIBRARIES/libandroidfw-static_intermediates)
-$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/STATIC_LIBRARIES/libaopt_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/UTILITY_EXECUTABLES/aopt_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj_arm/UTILITY_EXECUTABLES/aopt_intermediates)
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj_arm/STATIC_LIBRARIES/libaopt_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj_arm/STATIC_LIBRARIES/libaoptfw-static_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/STATIC_LIBRARIES/libaopt_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/STATIC_LIBRARIES/libaoptfw-static_intermediates)
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/bin/aopt)
-
-
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/system/bin/aopt64)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/root/sbin/aopt)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/root/sbin/aopt64)
 # ******************************************************************
 # NEWER CLEAN STEPS MUST BE AT THE END OF THE LIST ABOVE THIS BANNER
 # ******************************************************************

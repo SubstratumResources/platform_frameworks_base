@@ -77,7 +77,7 @@ CFLAGS := \
 CFLAGS += -Wno-format-y2k
 CFLAGS += -DSTATIC_ANDROIDFW_FOR_TOOLS
 CFLAGS += -DHAVE_ANDROID_OS=1
-CFLAGS += -D'AOPT_VERSION="$(PLATFORM_VERSION)-$(TARGET_BUILD_VARIANT)"' 
+CFLAGS += -D'AOPT_VERSION="android-$(PLATFORM_VERSION)-$(TARGET_BUILD_VARIANT)"' 
 CFLAGS += -Wall -Werror -Wno-error=unreachable-code -Wno-error=unknown-attributes
 CFLAGS += -Wno-error=unused-variable -Wno-error=unused-but-set-variable  
 aoptCppFlags := -std=gnu++14 -Wno-missing-field-initializers -O3 
@@ -181,11 +181,9 @@ LOCAL_SRC_FILES := $(aoptMain) $(aoptSources)
 endif
 
 LOCAL_MODULE_CLASS := UTILITY_EXECUTABLES
-LOCAL_MODULE_PATH := $(TARGET_ROOT_OUT_SBIN)
+LOCAL_MODULE_PATH := $(ANDROID_PRODUCT_OUT)/system/bin
 LOCAL_UNSTRIPPED_PATH := $(PRODUCT_OUT)/symbols/utilities
-LOCAL_LDFLAGS += \
--static -Wl,-rpath-link=/data/toolchain/sysroot/usr/lib/ \
--dynamic-linker,/system/bin/linker 
+LOCAL_LDFLAGS += -static
 LOCAL_FORCE_STATIC_EXECUTABLE := true
 LOCAL_PACK_MODULE_RELOCATIONS := false
 include $(BUILD_EXECUTABLE)
