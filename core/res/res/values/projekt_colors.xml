@@ -24,4 +24,7 @@
     <color name="tooltip_text_light">@color/foreground_material_light</color>
     <!-- tooltip dark text color -->
     <color name="tooltip_text_dark">@color/foreground_material_dark</color>
+
+    <!-- Resolver -->
+    <color name="resolver_list_bg">@color/white</color>
 </resources>
